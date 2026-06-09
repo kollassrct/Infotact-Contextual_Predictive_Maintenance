@@ -1,6 +1,4 @@
 # Infotact-Contextual_Predictive_Maintenance
-# Infotact Contextual Predictive Maintenance
-
 ## Team Project
 
 This project focuses on predicting machine failures before they occur by combining IoT sensor data and contextual environmental information.
