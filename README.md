@@ -248,7 +248,7 @@ Through this project, I aim to gain practical experience in:
 **Satya Sri Ram Charan Teja Kolla**
 
 Final Year B.Tech Student  
-Aspiring Data Scientist | Machine Learning Enthusiast | GATE 2027 Aspirant
+Aspiring Data Scientist Student | Machine Learning Enthusiast
 
 ---
 
