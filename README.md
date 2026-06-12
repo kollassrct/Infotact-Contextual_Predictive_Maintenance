@@ -219,7 +219,7 @@ Through this project, I aim to gain practical experience in:
 
 - [x] Project Initialization
 - [x] Dataset Selection
-- [ ] Data Ingestion
+- [x] Data Ingestion
 - [ ] Data Validation
 - [ ] Signal Processing Features
 
