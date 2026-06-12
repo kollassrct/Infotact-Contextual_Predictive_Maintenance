@@ -280,7 +280,7 @@ The final system will:
 * Support operational decision-making
 
 ---
-Internship Information
+**Internship Information**
 
 Organization: Infotact Solutions
 
