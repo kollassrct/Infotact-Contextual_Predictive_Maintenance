@@ -281,30 +281,6 @@ The final system will:
 
 ---
 
-# Team Members
-
-Developed as part of the Infotact Data Science & Machine Learning Internship Program.
-
-* Preeti Auditto
-* Faraz Khan
-* Kartik
-* Nuthan
-* Ram
-
----
-
-# Internship Information
-
-Organization: Infotact Solutions
-
-Domain: Data Science & Machine Learning
-
-Project Title: Contextual Predictive Maintenance Using IoT Edge AI
-
-Duration: 4 Weeks
-
----
-
 # Future Enhancements
 
 * Real-time sensor streaming
