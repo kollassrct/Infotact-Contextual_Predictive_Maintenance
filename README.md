@@ -280,6 +280,15 @@ The final system will:
 * Support operational decision-making
 
 ---
+Internship Information
+
+Organization: Infotact Solutions
+
+Domain: Data Science & Machine Learning
+
+Project Title: Contextual Predictive Maintenance Using IoT Edge AI
+
+Duration: 4 Weeks
 
 # Future Enhancements
 
