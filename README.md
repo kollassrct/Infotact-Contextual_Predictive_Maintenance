@@ -66,7 +66,7 @@ The dataset contains machine telemetry information including:
 ### Features to Generate
 
 - Rolling Mean
-- Rolling Standard Deviation
+- Rolling Standard Deviation (sd)
 - Rolling Variance
 
 ### Deliverables
