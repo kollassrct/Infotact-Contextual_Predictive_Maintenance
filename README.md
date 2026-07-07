@@ -225,15 +225,15 @@ Through this project, I aim to gain practical experience in:
 
 ### Week 2
 
-- [ ] Contextual Data Integration
-- [ ] Feature Engineering
-- [ ] Ablation Study
+- [x] Contextual Data Integration
+- [x] Feature Engineering
+- [x] Ablation Study
 
 ### Week 3
 
-- [ ] SMOTE Pipeline
-- [ ] LightGBM Training
-- [ ] Cross Validation
+- [x] SMOTE Pipeline
+- [x] LightGBM Training
+- [x] Cross Validation
 
 ### Week 4
 
