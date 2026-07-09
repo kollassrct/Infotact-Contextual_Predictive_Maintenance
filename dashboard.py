@@ -3,7 +3,26 @@
 # Project: Infotact Solutions | Branch: preeti-dev
 # Run with: streamlit run dashboard.py
 # ============================================================
+#
+# CHANGELOG (this revision):
+#   - Model is now trained ONCE and saved to disk (models/) with joblib.
+#     Every subsequent launch loads the saved model + test split instead
+#     of retraining from scratch.
+#   - LightGBM feature-name fix: feature names are cleaned once, forced
+#     onto the training data before fit(), and every downstream frame
+#     (test set, noisy test set, SHAP sample) is re-indexed to
+#     model.booster_.feature_name() before being passed to the model.
+#     This removes the "feature_names mismatch" / silent misalignment
+#     risk that noise injection + resampling can otherwise introduce.
+#   - Feature importance / SHAP now read feature names directly off the
+#     trained booster instead of a separately tracked list, so they can
+#     never drift out of sync with the model.
+#   - Small UI addition: a "Model Source" badge shows whether the model
+#     was loaded from cache or trained fresh (and only trains fresh once).
+# ============================================================
 
+import os
+import joblib
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -68,6 +87,22 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 3px 10px; border-radius: 20px;
     margin-right: 8px; margin-top: 10px;
 }
+.header-badge-cache {
+    display: inline-block;
+    background: #0d2b1f; border: 1px solid #1e7645;
+    color: #34d399; font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 3px 10px; border-radius: 20px;
+    margin-right: 8px; margin-top: 10px;
+}
+.header-badge-fresh {
+    display: inline-block;
+    background: #2b1f0d; border: 1px solid #76551e;
+    color: #fbbf24; font-size: 0.72rem;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 3px 10px; border-radius: 20px;
+    margin-right: 8px; margin-top: 10px;
+}
 
 .kpi-card {
     background: #0f1a2e; border: 1px solid #1e3254;
@@ -123,13 +158,22 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     padding: 24px 0 8px 0; letter-spacing: 0.05em;
 }
 
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+/* Recolor (don't hide) the native header/toolbar so Streamlit's own
+   built-in sidebar collapse/expand control keeps working exactly as
+   shipped — we only blend its background into the dark theme. */
+header[data-testid="stHeader"] { background: #0b0f1a; }
+
 .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Helpers ───────────────────────────────────────────────
 def clean_col_names(df):
+    """Strip characters LightGBM chokes on ([ ] ( ) ,) and normalise
+    whitespace to underscores, so feature names are stable, JSON-safe,
+    and identical every time this function runs on the same raw columns."""
     df.columns = (
         df.columns
         .str.replace('[', '', regex=False)
@@ -142,7 +186,13 @@ def clean_col_names(df):
     )
     return df
 
-# ── Load & Train ──────────────────────────────────────────
+# ── Saved-model paths ─────────────────────────────────────
+MODEL_DIR       = 'models'
+MODEL_PATH      = os.path.join(MODEL_DIR, 'lgbm_predictx_model.pkl')
+ARTIFACTS_PATH  = os.path.join(MODEL_DIR, 'lgbm_predictx_artifacts.pkl')
+
+
+# ── Load (or train once + save) ───────────────────────────
 @st.cache_resource(show_spinner=False)
 def load_model_and_data():
     import lightgbm as lgb
@@ -163,19 +213,57 @@ def load_model_and_data():
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y)
-    smote = SMOTE(random_state=42)
-    X_tr, y_tr = smote.fit_resample(X_train, y_train)
 
-    model = lgb.LGBMClassifier(
-        n_estimators=500, learning_rate=0.05, max_depth=8,
-        num_leaves=50, scale_pos_weight=(y==0).sum()/(y==1).sum(),
-        random_state=42, verbose=-1)
-    model.fit(X_tr, y_tr)
+    used_cache = os.path.exists(MODEL_PATH) and os.path.exists(ARTIFACTS_PATH)
 
-    return model, df, feature_cols_clean, feature_cols_orig, X_test, y_test
+    if used_cache:
+        # ---- Load previously trained model + matching test split ----
+        model    = joblib.load(MODEL_PATH)
+        artifact = joblib.load(ARTIFACTS_PATH)
+        X_test             = artifact['X_test']
+        y_test              = artifact['y_test']
+        feature_cols_clean  = artifact['feature_cols_clean']
+    else:
+        # ---- Train fresh (only happens on first-ever launch) ----
+        smote = SMOTE(random_state=42)
+        X_tr, y_tr = smote.fit_resample(X_train, y_train)
 
-with st.spinner("⚡ Initialising prediction engine..."):
-    model, df, feature_cols_clean, feature_cols_orig, X_test, y_test = load_model_and_data()
+        # LightGBM feature-name fix: force the exact same cleaned names
+        # onto the resampled training frame and pass them explicitly to
+        # fit(), so the names baked into the booster are guaranteed to
+        # match feature_cols_clean everywhere downstream.
+        X_tr.columns = feature_cols_clean
+
+        model = lgb.LGBMClassifier(
+            n_estimators=500, learning_rate=0.05, max_depth=8,
+            num_leaves=50, scale_pos_weight=(y==0).sum()/(y==1).sum(),
+            random_state=42, verbose=-1)
+        model.fit(X_tr, y_tr, feature_name=feature_cols_clean)
+
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        joblib.dump(model, MODEL_PATH)
+        joblib.dump({
+            'X_test': X_test,
+            'y_test': y_test,
+            'feature_cols_clean': feature_cols_clean,
+        }, ARTIFACTS_PATH)
+
+    # Always re-index to the booster's own feature order/names. This is
+    # the safety net that prevents any mismatch (e.g. if a future CSV
+    # has columns in a different order) from silently corrupting
+    # predictions.
+    model_feature_order = model.booster_.feature_name()
+    X_test = X_test[model_feature_order]
+
+    return model, df, model_feature_order, feature_cols_orig, X_test, y_test, used_cache
+
+
+model_source_known_before_load = os.path.exists(MODEL_PATH) and os.path.exists(ARTIFACTS_PATH)
+spinner_msg = ("⚡ Loading saved model from cache..." if model_source_known_before_load
+               else "⚡ Training model for the first time — this will be cached for future launches...")
+with st.spinner(spinner_msg):
+    (model, df, feature_cols_clean, feature_cols_orig,
+     X_test, y_test, used_cache) = load_model_and_data()
 
 # ── Sidebar ───────────────────────────────────────────────
 st.sidebar.markdown("""
@@ -202,7 +290,7 @@ noise_level     = st.sidebar.selectbox("SENSOR NOISE", [0.00,0.05,0.15,0.30],
                            0.15:"Medium (15%)",0.30:"High (30%)"}[x])
 num_machines    = st.sidebar.slider("MACHINES IN VIEW", 10, 100, 20, 10)
 
-st.sidebar.markdown("""
+st.sidebar.markdown(f"""
 <div style="margin-top:20px;padding-top:16px;border-top:1px solid #1e2d47;">
 <div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;
 color:#334155;font-weight:700;margin-bottom:10px;">Dataset Info</div>
@@ -214,10 +302,20 @@ border-radius:4px;">preeti-dev</code><br>
 🔢 10,000 sensor records<br>
 ⚠️ Failure rate ~3.4%<br>
 🤖 LightGBM + SMOTE<br>
-🔁 5-Fold Stratified CV
+💾 Model: {"loaded from cache" if used_cache else "trained fresh & cached"}
 </div></div>""", unsafe_allow_html=True)
 
+if os.path.exists(MODEL_PATH):
+    if st.sidebar.button("🔄 Retrain model (clear cache)"):
+        for p in (MODEL_PATH, ARTIFACTS_PATH):
+            if os.path.exists(p):
+                os.remove(p)
+        st.cache_resource.clear()
+        st.rerun()
+
 # ── Noise + Predictions ───────────────────────────────────
+# feature_cols_clean here IS model.booster_.feature_name(), guaranteed
+# in sync with the trained model (see load_model_and_data above).
 sensor_clean = [
     c.replace('[','').replace(']','').replace('(','')
      .replace(')','').replace(',','').replace(' ','_').replace('__','_')
@@ -235,7 +333,13 @@ def inject_noise(X_data, level):
             Xn[col] = Xn[col] + np.random.normal(0, level*Xn[col].std(), len(Xn))
     return Xn
 
+def align_to_model(X_data):
+    """LightGBM feature-name fix: re-index any frame to the exact column
+    order/names the booster was trained with before predicting on it."""
+    return X_data[model.booster_.feature_name()]
+
 Xd      = inject_noise(X_test, noise_level) if noise_level > 0 else X_test.copy()
+Xd      = align_to_model(Xd)
 y_proba = model.predict_proba(Xd)[:,1]
 y_pred  = (y_proba >= alert_threshold).astype(int)
 
@@ -279,7 +383,10 @@ def status_color(s):
 # PAGE 1 — OVERVIEW
 # ─────────────────────────────────────────────────────────
 if page == "🏠 Overview":
-    st.markdown("""
+    cache_badge = ('<span class="header-badge-cache">💾 Model: Cached</span>'
+                   if used_cache else
+                   '<span class="header-badge-fresh">🆕 Model: Freshly Trained</span>')
+    st.markdown(f"""
     <div class="header-banner">
         <div class="header-title">⚡ PredictX — Maintenance Intelligence</div>
         <div style="margin-top:6px;">
@@ -287,6 +394,7 @@ if page == "🏠 Overview":
             <span class="header-badge">LightGBM + SMOTE</span>
             <span class="header-badge">IoT Edge AI</span>
             <span class="header-badge">Infotact Solutions</span>
+            {cache_badge}
         </div>
         <div class="header-sub" style="margin-top:12px;">
             Contextual Predictive Maintenance · Manufacturing & Automotive · 4-Week Internship
@@ -350,11 +458,12 @@ if page == "🏠 Overview":
     # Dataset preview
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="section-header">Raw Dataset Preview — AI4I 2020</div>', unsafe_allow_html=True)
-    raw_preview = df[['Air temperature [K]','Process temperature [K]',
+    preview_cols = [c for c in ['Air temperature [K]','Process temperature [K]',
                        'Rotational speed [rpm]','Torque [Nm]',
-                       'Tool wear [min]','Machine failure']].head(8)
+                       'Tool wear [min]','Machine failure'] if c in df.columns]
+    raw_preview = df[preview_cols].head(8)
     st.dataframe(raw_preview.style.background_gradient(
-        subset=['Machine failure'], cmap='Reds'),
+        subset=['Machine failure'], cmap='Reds') if 'Machine failure' in preview_cols else raw_preview,
         use_container_width=True, height=280)
 
 
@@ -508,6 +617,7 @@ elif page == "📡 Noise Analysis":
     noise_rows = []
     for lvl, lbl in zip(levels, labels):
         Xn   = inject_noise(X_test, lvl) if lvl > 0 else X_test.copy()
+        Xn   = align_to_model(Xn)   # LightGBM feature-name fix
         p    = model.predict_proba(Xn)[:,1]
         pred = (p >= alert_threshold).astype(int)
         f1   = sk_f1(y_test, pred, average='macro')
@@ -592,9 +702,12 @@ elif page == "🧠 Explainability":
     ctx_feats = ['ambient_temperature_C','factory_load_density',
                  'temp_gap','load_torque_interaction','heat_stress_index']
 
-    # Feature importance
+    # Feature importance — read names straight off the trained booster
+    # (LightGBM feature-name fix) so this can never drift out of sync
+    # with what the model actually learned on.
+    booster_feature_names = model.booster_.feature_name()
     importances = pd.Series(
-        model.feature_importances_, index=feature_cols_clean
+        model.feature_importances_, index=booster_feature_names
     ).sort_values(ascending=False).head(15)
 
     st.markdown('<div class="section-header">Feature Importance — LightGBM</div>',
@@ -627,7 +740,7 @@ elif page == "🧠 Explainability":
     try:
         import shap
         with st.spinner("Computing SHAP values..."):
-            X_sample    = X_test.sample(n=300, random_state=42)
+            X_sample    = align_to_model(X_test.sample(n=min(300, len(X_test)), random_state=42))
             explainer   = shap.TreeExplainer(model)
             shap_values = explainer.shap_values(X_sample)
 
@@ -657,7 +770,7 @@ elif page == "🧠 Explainability":
             values       = shap_values[best_idx],
             base_values  = explainer.expected_value,
             data         = X_sample.iloc[best_idx].values,
-            feature_names= feature_cols_clean
+            feature_names= booster_feature_names
         )
         st.markdown(f"**SHAP Waterfall — Highest Risk Machine "
                     f"(Prob: {y_proba_sample[best_idx]*100:.1f}%)**")
@@ -700,12 +813,12 @@ elif page == "📋 Project Summary":
             "✅ Ablation study proved external features improve Macro F1",
         ], CP),
         ("Week 3", "Imbalanced Classification & LightGBM Modeling", [
-            "✅ 5-Fold Stratified Cross-Validation pipeline built",
-            "✅ SMOTE applied strictly inside training folds (no data leakage)",
+            "✅ Stratified train/test split with SMOTE applied only on the training fold (no leakage)",
             "✅ LightGBM trained with 500 trees, learning_rate=0.05",
+            "✅ Model + feature names persisted to disk (models/) — no retraining on every launch",
             "✅ Feature importance + SHAP explainability analysis",
             "✅ Confusion matrix, precision-recall curve generated",
-            "✅ CV results saved to data/processed/",
+            "✅ Cleaned, LightGBM-safe feature names enforced end-to-end",
         ], CN),
         ("Week 4", "Noise Sensitivity Analysis & Threshold Tuning", [
             "✅ Gaussian noise injected at 4 levels: 0%, 5%, 15%, 30%",
@@ -751,7 +864,7 @@ elif page == "📋 Project Summary":
         (r1, "10,000",          "Records Processed",   "kpi-total"),
         (r2, "~3.4%",           "Failure Rate",         "kpi-critical"),
         (r3, f"{final_f1:.4f}", "Final Macro F1",       "kpi-normal"),
-        (r4, "5-Fold CV",       "Validation Strategy",  "kpi-avg"),
+        (r4, "Cached Model",    "Deployment Mode",      "kpi-avg"),
     ]:
         with col:
             st.markdown(f"""<div class="kpi-card">
