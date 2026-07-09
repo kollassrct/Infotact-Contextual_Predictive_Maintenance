@@ -3,23 +3,6 @@
 # Project: Infotact Solutions | Branch: preeti-dev
 # Run with: streamlit run dashboard.py
 # ============================================================
-#
-# CHANGELOG (this revision):
-#   - Model is now trained ONCE and saved to disk (models/) with joblib.
-#     Every subsequent launch loads the saved model + test split instead
-#     of retraining from scratch.
-#   - LightGBM feature-name fix: feature names are cleaned once, forced
-#     onto the training data before fit(), and every downstream frame
-#     (test set, noisy test set, SHAP sample) is re-indexed to
-#     model.booster_.feature_name() before being passed to the model.
-#     This removes the "feature_names mismatch" / silent misalignment
-#     risk that noise injection + resampling can otherwise introduce.
-#   - Feature importance / SHAP now read feature names directly off the
-#     trained booster instead of a separately tracked list, so they can
-#     never drift out of sync with the model.
-#   - Small UI addition: a "Model Source" badge shows whether the model
-#     was loaded from cache or trained fresh (and only trains fresh once).
-# ============================================================
 
 import os
 import joblib
